@@ -28,6 +28,11 @@
 </head>
 
 <body>
+  <div id="gui">
+    <div id="fullscreen" style="position: absolute; top: 10px; right: 10px; z-index: 100;">
+      <button id="test">Test</button>
+    </div>
+  </div>
   <script type="module">
     import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
     import * as THREE from 'three';
@@ -37,12 +42,41 @@
         'initialCameraLookAt': [0.45622, 1.95338, 1.51278],
     });
     let path = 'https://radiance-pipeline.nyc3.cdn.digitaloceanspaces.com/PXL_20240310_011226740.ply';
+
+    // TODO: Automate ksplat conversion for better mobile performance
+    //
+    // via:
+    // const compressionLevel = 1;
+    // const splatAlphaRemovalThreshold = 5; // out of 255
+    // GaussianSplats3D.PlyLoader.loadFromURL('<path to .ply or .splat file>', compressionLevel, splatAlphaRemovalThreshold)
+    // .then((splatBuffer) => {
+    //     GaussianSplats3D.KSplatLoader.downloadFile(splatBuffer, 'converted_file.ksplat');
+    // });
+    //
+    // or:
+    // node util/create-ksplat.js [path to .PLY or .SPLAT] [output file] [compression level = 0] [alpha removal threshold = 1]
+
     // path += isMobile() ? '.ksplat' : '_high.ksplat';
+
     viewer.addSplatScene(path, {
-      'streamView': true
+      'streamView': true,
+      'showLoadingUI': true,
     })
+    // viewer.addSplatScene('<path to .ply, .ksplat, or .splat file>', {
+    //   'splatAlphaRemovalThreshold': 5,
+    //   'showLoadingUI': true,
+    //   'position': [0, 1, 0],
+    //   'rotation': [0, 0, 0, 1],
+    //   'scale': [1.5, 1.5, 1.5]
+    // })
     .then(() => {
         viewer.start();
+        document.querySelector('#test').addEventListener('click', () => {
+          // See removeSplatScene() discussion here: https://github.com/mkkellogg/GaussianSplats3D/issues/149
+          console.log(viewer.sceneHelper)
+          // console.log(viewer.sceneHelper.meshCursor)
+          // viewer.sceneHelper.dispose()
+        });
     });
   </script>
 </body>
