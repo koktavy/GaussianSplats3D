@@ -1,6 +1,10 @@
+import dotenv from 'dotenv';
+dotenv.config();
+
 import * as http from 'http';
 import * as fs from 'fs';
 import * as path from 'path';
+import { listSpacesObjects } from './spaces-list.js'; // Use the correct relative path
 
 let baseDirectory = '.';
 let port = 8080;
@@ -63,6 +67,20 @@ http
     if (queryStringStart && queryStringStart > 0) {
       queryString = filePath.substring(queryStringStart + 1);
       filePath = filePath.substring(0, queryStringStart);
+    }
+
+    if (request.url === '/list') {
+      listSpacesObjects((err, data) => {
+        if (err) {
+          console.error('Error occurred:', err);
+          response.writeHead(500, { 'Content-Type': 'application/json' });
+          response.end(JSON.stringify({ error: err.message }));
+          return;
+        }
+        response.writeHead(200, { 'Content-Type': 'application/json' });
+        response.end(JSON.stringify(data));
+      });
+      return;
     }
 
     let testDirectory = filePath;

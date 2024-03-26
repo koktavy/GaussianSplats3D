@@ -43,6 +43,34 @@
   <script type="module">
     import * as GaussianSplats3D from '@mkkellogg/gaussian-splats-3d';
     import * as THREE from 'three';
+
+    // Get a list of splats from the Spaces bucket
+    fetch('/list')
+      .then(response => {
+        if (!response.ok) {
+          throw new Error('Network response was... not ok');
+        }
+        return response.json();
+      })
+      .then(data => {
+        // Assuming `data` is an XML string
+        const parser = new DOMParser();
+        const xmlDoc = parser.parseFromString(data, "application/xml");
+        const contents = xmlDoc.getElementsByTagName("Contents");
+        const contentsArray = [];
+
+        for (let i = 0; i < contents.length; i++) {
+          const content = contents[i];
+          const key = content.getElementsByTagName("Key")[0].textContent;
+          contentsArray.push(key);
+        }
+
+        console.log(contentsArray);
+      })
+      .catch(error => {
+        console.error('There has been a problem with your fetch operation:', error);
+      });
+
     const viewer = new GaussianSplats3D.Viewer({
         'cameraUp': [0.01933, -0.75830, -0.65161],
         'initialCameraPosition': [1.54163, 2.68515, -6.37228],
