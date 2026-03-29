@@ -7,7 +7,7 @@ import * as path from 'path';
 import { listSpacesObjects } from './spaces-list.js'; // Use the correct relative path
 
 let baseDirectory = '.';
-let port = 8080;
+let port = process.env.PORT || 8080;  // Use PORT env variable if available (for DigitalOcean, Heroku, etc.)
 let host = '0.0.0.0';
 let lasttRequesTime = performance.now() / 1000;
 for (let i = 0; i < process.argv.length; ++i) {
