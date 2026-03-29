@@ -213,19 +213,40 @@
     // Setup Three.js scene
     const scene = new THREE.Scene();
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
-    camera.position.set(1.54163, 2.68515, -6.37228);
-    camera.up.set(0.01933, -0.75830, -0.65161);
-    camera.lookAt(0.45622, 1.95338, 1.51278);
+
+    // Standardized camera setup
+    camera.position.set(0, 1.6, 3);  // Standard position: eye level, 3 units back
+    camera.up.set(0, 1, 0);           // Standard up vector (Y-axis)
+    camera.lookAt(0, 1, 0);           // Look at eye level center
 
     const renderer = new THREE.WebGLRenderer({ antialias: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     document.body.appendChild(renderer.domElement);
 
-    // Setup controls
+    // Setup controls with damping
     const controls = new OrbitControls(camera, renderer.domElement);
-    controls.target.set(0.45622, 1.95338, 1.51278);
+    controls.target.set(0, 1, 0);     // Look at eye level center
+    controls.enableDamping = true;     // Smooth camera motion
+    controls.dampingFactor = 0.13;     // Damping inertia (higher = tighter/more responsive)
+    controls.screenSpacePanning = true; // Pan in screen space (horizontal/vertical relative to view)
+    controls.minDistance = 0.2;        // Minimum zoom distance
+    controls.maxDistance = 50;         // Maximum zoom distance
+    controls.maxPolarAngle = Math.PI;  // Allow looking from below
     controls.update();
+
+    // Function to cancel any active camera transition
+    function cancelTransition() {
+      if (targetTransition) {
+        targetTransition = null;
+      }
+    }
+
+    // Cancel transition when user interacts with OrbitControls (drag, rotate, pan, zoom)
+    controls.addEventListener('start', cancelTransition);
+
+    // Listen for scroll wheel to cancel transitions
+    renderer.domElement.addEventListener('wheel', cancelTransition);
 
     // Handle window resize
     window.addEventListener('resize', () => {
@@ -234,9 +255,142 @@
       renderer.setSize(window.innerWidth, window.innerHeight);
     });
 
+    // WASD keyboard navigation
+    const keyState = {};
+    const moveSpeed = 0.05;     // Base movement speed (halved from 0.1)
+    const sprintMultiplier = 3; // Sprint speed when holding Shift
+
+    window.addEventListener('keydown', (e) => {
+      keyState[e.key.toLowerCase()] = true;
+    });
+
+    window.addEventListener('keyup', (e) => {
+      delete keyState[e.key.toLowerCase()];
+    });
+
+    function handleKeyboardMovement() {
+      if (Object.keys(keyState).length === 0) return;
+
+      const speed = keyState['shift'] ? moveSpeed * sprintMultiplier : moveSpeed;
+
+      // Get camera direction vectors
+      const forward = new THREE.Vector3();
+      camera.getWorldDirection(forward);
+      forward.y = 0; // Keep movement horizontal
+      forward.normalize();
+
+      const right = new THREE.Vector3();
+      right.crossVectors(forward, camera.up).normalize();
+
+      const movement = new THREE.Vector3();
+
+      // WASD movement
+      if (keyState['w']) movement.add(forward);
+      if (keyState['s']) movement.sub(forward);
+      if (keyState['a']) movement.sub(right);
+      if (keyState['d']) movement.add(right);
+
+      // Q/E for vertical movement
+      if (keyState['q']) movement.y -= 1;
+      if (keyState['e']) movement.y += 1;
+
+      // Apply movement - only cancel transition if user is actually moving
+      if (movement.length() > 0) {
+        // Cancel any active transition when user moves with keyboard
+        cancelTransition();
+
+        movement.normalize().multiplyScalar(speed);
+        camera.position.add(movement);
+        controls.target.add(movement);
+      }
+    }
+
+    // Raycasting for click-to-orbit
+    const raycaster = new THREE.Raycaster();
+    let clickMouseDownPos = null;
+    let targetTransition = null; // { from: Vector3, to: Vector3, startTime: number, duration: number }
+
+    // Track mouse down position to detect drags
+    renderer.domElement.addEventListener('mousedown', (event) => {
+      clickMouseDownPos = { x: event.clientX, y: event.clientY };
+    });
+
+    renderer.domElement.addEventListener('mouseup', (event) => {
+      // Only respond to left clicks
+      if (event.button !== 0) return;
+
+      // Ignore if this was a drag (mouse moved more than 5 pixels)
+      if (clickMouseDownPos) {
+        const dx = event.clientX - clickMouseDownPos.x;
+        const dy = event.clientY - clickMouseDownPos.y;
+        const dragDistance = Math.sqrt(dx * dx + dy * dy);
+
+        if (dragDistance > 5) {
+          clickMouseDownPos = null;
+          return; // This was a drag, not a click
+        }
+      }
+
+      clickMouseDownPos = null;
+
+      // Calculate mouse position in normalized device coordinates (-1 to +1)
+      const mouse = new THREE.Vector2(
+        (event.clientX / window.innerWidth) * 2 - 1,
+        -(event.clientY / window.innerHeight) * 2 + 1
+      );
+
+      // Update raycaster
+      raycaster.setFromCamera(mouse, camera);
+
+      // Find intersections with scene objects
+      const intersects = raycaster.intersectObjects(scene.children, true);
+
+      // Find first SplatMesh intersection
+      const splatIntersection = intersects.find(i => i.object === currentSplatMesh);
+
+      if (splatIntersection) {
+        // Calculate offset from old target to new target
+        const offset = new THREE.Vector3()
+          .subVectors(splatIntersection.point, controls.target);
+
+        // Start smooth transition - move both camera and target by the same offset
+        // This preserves the viewing direction while changing the orbit point
+        targetTransition = {
+          fromTarget: controls.target.clone(),
+          toTarget: splatIntersection.point.clone(),
+          fromCamera: camera.position.clone(),
+          toCamera: camera.position.clone().add(offset),
+          startTime: performance.now(),
+          duration: 600 // milliseconds
+        };
+
+        console.log('New orbit target:', splatIntersection.point);
+      }
+    });
+
     // Animation loop
     function animate() {
       requestAnimationFrame(animate);
+      handleKeyboardMovement();
+
+      // Handle smooth orbit target transition
+      if (targetTransition) {
+        const elapsed = performance.now() - targetTransition.startTime;
+        const progress = Math.min(elapsed / targetTransition.duration, 1);
+
+        // Easing function (ease-out cubic for smooth deceleration)
+        const eased = 1 - Math.pow(1 - progress, 3);
+
+        // Interpolate both camera position and target to maintain viewing direction
+        controls.target.lerpVectors(targetTransition.fromTarget, targetTransition.toTarget, eased);
+        camera.position.lerpVectors(targetTransition.fromCamera, targetTransition.toCamera, eased);
+
+        // End transition when complete
+        if (progress >= 1) {
+          targetTransition = null;
+        }
+      }
+
       controls.update();
       renderer.render(scene, camera);
     }
