@@ -90,6 +90,7 @@
 
     #scene-list {
       padding: 10px;
+      padding-bottom: 10px;
     }
 
     .scene-item {
@@ -174,11 +175,14 @@
 
     #sidebar::-webkit-scrollbar-thumb {
       background: rgba(255, 255, 255, 0.2);
+      background-clip: padding-box;
+      border: 0.5px solid transparent;
       border-radius: 4px;
     }
 
     #sidebar::-webkit-scrollbar-thumb:hover {
       background: rgba(255, 255, 255, 0.3);
+      background-clip: padding-box;
     }
 
   </style>
