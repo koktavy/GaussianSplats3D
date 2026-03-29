@@ -7,7 +7,11 @@
     "type": "module",
     "scripts": {
         "dev": "node util/server.js -d ./demo -p 3000",
-        "start": "npm run dev"
+        "build": "echo 'No build step required'",
+        "start": "node util/server.js -d ./demo -p 8080"
+    },
+    "engines": {
+        "node": ">=18.0.0"
     },
     "keywords": [
         "three",
