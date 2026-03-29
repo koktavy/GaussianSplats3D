@@ -1,4 +1,8 @@
 import SorterWasm from './sorter.wasm';
+import SorterWasmNoSIMD from './sorter_no_simd.wasm';
+import SorterWasmNonShared from './sorter_non_shared.wasm';
+import SorterWasmNoSIMDNonShared from './sorter_no_simd_non_shared.wasm';
+import { isIOS, getIOSSemever } from '../Util.js';
 import { Constants } from '../Constants.js';
 
 function sortWorker(self) {
@@ -11,7 +15,7 @@ function sortWorker(self) {
     let splatCount;
     let indexesToSortOffset;
     let sortedIndexesOffset;
-    let transformIndexesOffset;
+    let sceneIndexesOffset;
     let transformsOffset;
     let precomputedDistancesOffset;
     let mappedDistancesOffset;
@@ -20,7 +24,8 @@ function sortWorker(self) {
     let modelViewProjOffset;
     let countsZero;
     let sortedIndexesOut;
-
+    let distanceMapRange;
+    let uploadedSplatCount;
     let Constants;
 
     function sort(splatSortCount, splatRenderCount, modelViewProj,
@@ -45,12 +50,12 @@ function sortWorker(self) {
             }
         }
 
-        if (!countsZero) countsZero = new Uint32Array(Constants.DepthMapRange);
+        if (!countsZero) countsZero = new Uint32Array(distanceMapRange);
         new Float32Array(wasmMemory, modelViewProjOffset, 16).set(modelViewProj);
-        new Uint32Array(wasmMemory, frequenciesOffset, Constants.DepthMapRange).set(countsZero);
+        new Uint32Array(wasmMemory, frequenciesOffset, distanceMapRange).set(countsZero);
         wasmInstance.exports.sortIndexes(indexesToSortOffset, centersOffset, precomputedDistancesOffset,
                                          mappedDistancesOffset, frequenciesOffset, modelViewProjOffset,
-                                         sortedIndexesOffset, transformIndexesOffset, transformsOffset, Constants.DepthMapRange,
+                                         sortedIndexesOffset, sceneIndexesOffset, transformsOffset, distanceMapRange,
                                          splatSortCount, splatRenderCount, splatCount, usePrecomputedDistances, integerBasedSort,
                                          dynamicMode);
 
@@ -78,21 +83,22 @@ function sortWorker(self) {
     self.onmessage = (e) => {
         if (e.data.centers) {
             centers = e.data.centers;
-            transformIndexes = e.data.transformIndexes;
+            sceneIndexes = e.data.sceneIndexes;
             if (integerBasedSort) {
-                new Int32Array(wasmMemory, centersOffset, splatCount * 4).set(new Int32Array(centers));
+                new Int32Array(wasmMemory, centersOffset + e.data.range.from * Constants.BytesPerInt * 4,
+                               e.data.range.count * 4).set(new Int32Array(centers));
             } else {
-                new Float32Array(wasmMemory, centersOffset, splatCount * 4).set(new Float32Array(centers));
+                new Float32Array(wasmMemory, centersOffset + e.data.range.from * Constants.BytesPerFloat * 4,
+                                 e.data.range.count * 4).set(new Float32Array(centers));
             }
             if (dynamicMode) {
-                new Uint32Array(wasmMemory, transformIndexesOffset, splatCount).set(new Uint32Array(transformIndexes));
+                new Uint32Array(wasmMemory, sceneIndexesOffset + e.data.range.from * 4,
+                                e.data.range.count).set(new Uint32Array(sceneIndexes));
             }
-            self.postMessage({
-                'sortSetupComplete': true,
-            });
+            uploadedSplatCount = e.data.range.from + e.data.range.count;
         } else if (e.data.sort) {
-            const renderCount = e.data.sort.splatRenderCount || 0;
-            const sortCount = e.data.sort.splatSortCount || 0;
+            const renderCount = Math.min(e.data.sort.splatRenderCount || 0, uploadedSplatCount);
+            const sortCount = Math.min(e.data.sort.splatSortCount || 0, uploadedSplatCount);
             const usePrecomputedDistances = e.data.sort.usePrecomputedDistances;
 
             let copyIndexesToSort;
@@ -113,6 +119,8 @@ function sortWorker(self) {
             useSharedMemory = e.data.init.useSharedMemory;
             integerBasedSort = e.data.init.integerBasedSort;
             dynamicMode = e.data.init.dynamicMode;
+            distanceMapRange = e.data.init.distanceMapRange;
+            uploadedSplatCount = 0;
 
             const CENTERS_BYTES_PER_ENTRY = integerBasedSort ? (Constants.BytesPerInt * 4) : (Constants.BytesPerFloat * 4);
 
@@ -126,7 +134,8 @@ function sortWorker(self) {
                                                           (splatCount * Constants.BytesPerInt) : (splatCount * Constants.BytesPerFloat);
             const memoryRequiredForMappedDistances = splatCount * Constants.BytesPerInt;
             const memoryRequiredForSortedIndexes = splatCount * Constants.BytesPerInt;
-            const memoryRequiredForIntermediateSortBuffers = Constants.DepthMapRange * Constants.BytesPerInt * 2;
+            const memoryRequiredForIntermediateSortBuffers = integerBasedSort ? (distanceMapRange * Constants.BytesPerInt * 2) :
+                                                                                (distanceMapRange * Constants.BytesPerFloat * 2);
             const memoryRequiredforTransformIndexes = dynamicMode ? (splatCount * Constants.BytesPerInt) : 0;
             const memoryRequiredforTransforms = dynamicMode ? (Constants.MaxScenes * matrixSize) : 0;
             const extraMemory = Constants.MemoryPageSize * 32;
@@ -146,8 +155,8 @@ function sortWorker(self) {
                 module: {},
                 env: {
                     memory: new WebAssembly.Memory({
-                        initial: totalPagesRequired * 2,
-                        maximum: totalPagesRequired * 4,
+                        initial: totalPagesRequired,
+                        maximum: totalPagesRequired,
                         shared: true,
                     }),
                 }
@@ -165,8 +174,8 @@ function sortWorker(self) {
                 mappedDistancesOffset = precomputedDistancesOffset + memoryRequiredForPrecomputedDistances;
                 frequenciesOffset = mappedDistancesOffset + memoryRequiredForMappedDistances;
                 sortedIndexesOffset = frequenciesOffset + memoryRequiredForIntermediateSortBuffers;
-                transformIndexesOffset = sortedIndexesOffset + memoryRequiredForSortedIndexes;
-                transformsOffset = transformIndexesOffset + memoryRequiredforTransformIndexes;
+                sceneIndexesOffset = sortedIndexesOffset + memoryRequiredForSortedIndexes;
+                transformsOffset = sceneIndexesOffset + memoryRequiredforTransformIndexes;
                 wasmMemory = sorterWasmImport.env.memory.buffer;
                 if (useSharedMemory) {
                     self.postMessage({
@@ -190,7 +199,8 @@ function sortWorker(self) {
     };
 }
 
-export function createSortWorker(splatCount, useSharedMemory, integerBasedSort, dynamicMode) {
+export function createSortWorker(splatCount, useSharedMemory, enableSIMDInSort, integerBasedSort, dynamicMode,
+                                 splatSortDistanceMapPrecision = Constants.DefaultSplatSortDistanceMapPrecision) {
     const worker = new Worker(
         URL.createObjectURL(
             new Blob(['(', sortWorker.toString(), ')(self)'], {
@@ -199,7 +209,27 @@ export function createSortWorker(splatCount, useSharedMemory, integerBasedSort, 
         ),
     );
 
-    const sorterWasmBinaryString = atob(SorterWasm);
+    let sourceWasm = SorterWasm;
+
+    // iOS makes choosing the right WebAssembly configuration tricky :(
+    const iOSSemVer = isIOS() ? getIOSSemever() : null;
+    if (!enableSIMDInSort && !useSharedMemory) {
+        sourceWasm = SorterWasmNoSIMD;
+        // Testing on various devices has shown that even when shared memory is disabled, the WASM module with shared
+        // memory can still be used most of the time -- the exception seems to be iOS devices below 16.4
+        if (iOSSemVer && iOSSemVer.major <= 16 && iOSSemVer.minor < 4) {
+            sourceWasm = SorterWasmNoSIMDNonShared;
+        }
+    } else if (!enableSIMDInSort) {
+        sourceWasm = SorterWasmNoSIMD;
+    } else if (!useSharedMemory) {
+        // Same issue with shared memory as above on iOS devices
+        if (iOSSemVer && iOSSemVer.major <= 16 && iOSSemVer.minor < 4) {
+            sourceWasm = SorterWasmNonShared;
+        }
+    }
+
+    const sorterWasmBinaryString = atob(sourceWasm);
     const sorterWasmBytes = new Uint8Array(sorterWasmBinaryString.length);
     for (let i = 0; i < sorterWasmBinaryString.length; i++) {
         sorterWasmBytes[i] = sorterWasmBinaryString.charCodeAt(i);
@@ -212,11 +242,11 @@ export function createSortWorker(splatCount, useSharedMemory, integerBasedSort, 
             'useSharedMemory': useSharedMemory,
             'integerBasedSort': integerBasedSort,
             'dynamicMode': dynamicMode,
+            'distanceMapRange': 1 << splatSortDistanceMapPrecision,
             // Super hacky
             'Constants': {
                 'BytesPerFloat': Constants.BytesPerFloat,
                 'BytesPerInt': Constants.BytesPerInt,
-                'DepthMapRange': Constants.DepthMapRange,
                 'MemoryPageSize': Constants.MemoryPageSize,
                 'MaxScenes': Constants.MaxScenes
             }
