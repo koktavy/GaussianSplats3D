@@ -213,6 +213,7 @@
     let lights = new Set();
     let currentSplatMesh = null;
     let currentSceneIndex = null;
+    let activeIndicators = []; // Track active 3D indicators
 
     // Setup Three.js scene
     const scene = new THREE.Scene();
@@ -353,6 +354,9 @@
       const splatIntersection = intersects.find(i => i.object === currentSplatMesh);
 
       if (splatIntersection) {
+        // Show 3D visual indicator at intersection point
+        showRaycastIndicator3D(splatIntersection.point);
+
         // Calculate offset from old target to new target
         const offset = new THREE.Vector3()
           .subVectors(splatIntersection.point, controls.target);
@@ -371,6 +375,53 @@
         console.log('New orbit target:', splatIntersection.point);
       }
     });
+
+    // Function to show 3D raycast click indicator
+    function showRaycastIndicator3D(position) {
+      // Mark all existing indicators for fast fade
+      for (const indicator of activeIndicators) {
+        if (!indicator.fastFade) {
+          indicator.fastFade = true;
+          indicator.fastFadeStartTime = performance.now();
+          indicator.opacityAtFastFade = indicator.mesh.material.opacity;
+        }
+      }
+
+      // Create a ring geometry for the indicator (thinner ring)
+      const geometry = new THREE.RingGeometry(0.05, 0.058, 32);
+      const material = new THREE.MeshBasicMaterial({
+        color: 0x7dff14, // Neon green-yellow
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 1,
+        depthTest: false, // Don't clip behind objects
+        depthWrite: false // Don't write to depth buffer
+      });
+
+      const ring = new THREE.Mesh(geometry, material);
+      ring.position.copy(position);
+      ring.renderOrder = 999; // Render after everything else
+
+      // Orient the ring to face the camera
+      ring.lookAt(camera.position);
+
+      scene.add(ring);
+
+      // Track the indicator with animation data
+      const indicator = {
+        mesh: ring,
+        geometry: geometry,
+        material: material,
+        startTime: performance.now(),
+        duration: 650,
+        initialScale: 0.7,
+        innerRadius: 0.05,
+        outerRadius: 0.058,
+        fastFade: false
+      };
+
+      activeIndicators.push(indicator);
+    }
 
     // Animation loop
     function animate() {
@@ -392,6 +443,60 @@
         // End transition when complete
         if (progress >= 1) {
           targetTransition = null;
+        }
+      }
+
+      // Animate 3D indicators
+      for (let i = activeIndicators.length - 1; i >= 0; i--) {
+        const indicator = activeIndicators[i];
+        const elapsed = performance.now() - indicator.startTime;
+        const progress = Math.min(elapsed / indicator.duration, 1);
+
+        // Scale up and fade out (smaller max scale)
+        const scale = 1 + progress * 0.25; // Grow to 1.25x size
+        indicator.mesh.scale.set(scale, scale, 1);
+
+        // Handle fast fade if triggered by new indicator
+        if (indicator.fastFade) {
+          const fastFadeElapsed = performance.now() - indicator.fastFadeStartTime;
+          const fastFadeDuration = 150; // 150ms quick fade
+          const fastFadeProgress = Math.min(fastFadeElapsed / fastFadeDuration, 1);
+          indicator.mesh.material.opacity = indicator.opacityAtFastFade * (1 - fastFadeProgress);
+
+          // Remove immediately after fast fade completes
+          if (fastFadeProgress >= 1) {
+            scene.remove(indicator.mesh);
+            indicator.mesh.geometry.dispose();
+            indicator.mesh.material.dispose();
+            activeIndicators.splice(i, 1);
+            continue;
+          }
+        } else {
+          // Normal fade out - start fading at 40% progress
+          const fadeProgress = Math.max(0, (progress - 0.4) / 0.6);
+          indicator.mesh.material.opacity = 1 - fadeProgress;
+        }
+
+        // Shrink the ring width as it expands
+        const widthScale = 1 - progress * 0.5; // Shrink to 50% of original width
+        const newInnerRadius = indicator.innerRadius * scale;
+        const thickness = (indicator.outerRadius - indicator.innerRadius) * widthScale;
+        const newOuterRadius = newInnerRadius + thickness;
+
+        // Recreate geometry with new dimensions
+        const newGeometry = new THREE.RingGeometry(newInnerRadius, newOuterRadius, 32);
+        indicator.mesh.geometry.dispose();
+        indicator.mesh.geometry = newGeometry;
+
+        // Keep ring facing camera
+        indicator.mesh.lookAt(camera.position);
+
+        // Remove when animation is complete (normal fade)
+        if (!indicator.fastFade && progress >= 1) {
+          scene.remove(indicator.mesh);
+          indicator.mesh.geometry.dispose();
+          indicator.mesh.material.dispose();
+          activeIndicators.splice(i, 1);
         }
       }
 
