@@ -185,6 +185,85 @@
       background-clip: padding-box;
     }
 
+    /* Loading Indicator */
+    #loading-indicator {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(10px);
+      border: 1px solid rgba(125, 255, 20, 0.3);
+      border-radius: 12px;
+      padding: 30px 40px;
+      color: white;
+      font-size: 16px;
+      display: none;
+      flex-direction: column;
+      gap: 15px;
+      z-index: 1000;
+      box-shadow: 0 0 20px rgba(125, 255, 20, 0.2);
+      min-width: 300px;
+    }
+
+    #loading-indicator.visible {
+      display: flex;
+    }
+
+    .loading-header {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    .loading-spinner {
+      width: 24px;
+      height: 24px;
+      border: 3px solid rgba(125, 255, 20, 0.2);
+      border-top-color: #7dff14;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .loading-progress-container {
+      width: 100%;
+      height: 6px;
+      background: rgba(125, 255, 20, 0.1);
+      border-radius: 3px;
+      overflow: hidden;
+      display: none;
+    }
+
+    .loading-progress-container.visible {
+      display: block;
+    }
+
+    .loading-progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #7dff14, #39ff14);
+      border-radius: 3px;
+      width: 0%;
+      box-shadow: 0 0 10px rgba(125, 255, 20, 0.5);
+      min-width: 0;
+      max-width: 100%;
+    }
+
+    .loading-progress-text {
+      font-size: 12px;
+      color: rgba(255, 255, 255, 0.6);
+      text-align: center;
+      display: none;
+    }
+
+    .loading-progress-text.visible {
+      display: block;
+    }
+
   </style>
 
 </head>
@@ -204,6 +283,18 @@
 
     <!-- Sidebar Toggle Button -->
     <div id="sidebar-toggle">☰</div>
+
+    <!-- Loading Indicator -->
+    <div id="loading-indicator">
+      <div class="loading-header">
+        <div class="loading-spinner"></div>
+        <span id="loading-text">Loading scene...</span>
+      </div>
+      <div class="loading-progress-container" id="loading-progress-container">
+        <div class="loading-progress-bar" id="loading-progress-bar"></div>
+      </div>
+      <div class="loading-progress-text" id="loading-progress-text">0%</div>
+    </div>
   </div>
   <script type="module">
     import * as THREE from 'three';
@@ -214,6 +305,8 @@
     let currentSplatMesh = null;
     let currentSceneIndex = null;
     let activeIndicators = []; // Track active 3D indicators
+    let loadedSplatMeshes = []; // Track all loaded splat meshes (for multi-load with Ctrl)
+    let isLoading = false; // Prevent concurrent loads
 
     // Setup Three.js scene
     const scene = new THREE.Scene();
@@ -350,8 +443,10 @@
       // Find intersections with scene objects
       const intersects = raycaster.intersectObjects(scene.children, true);
 
-      // Find first SplatMesh intersection
-      const splatIntersection = intersects.find(i => i.object === currentSplatMesh);
+      // Find first SplatMesh intersection (check current mesh or any loaded mesh)
+      const splatIntersection = intersects.find(i =>
+        i.object === currentSplatMesh || loadedSplatMeshes.includes(i.object)
+      );
 
       if (splatIntersection) {
         // Show 3D visual indicator at intersection point
@@ -508,36 +603,174 @@
     // ///////////////////////////////////////////
     // Load a specific scene
     // ///////////////////////////////////////////
-    const loadScene = async (sceneName, sceneIndex) => {
-      console.log('Loading scene:', sceneName);
+    const loadScene = async (sceneName, sceneIndex, multiLoad = false) => {
+      // Prevent multiple concurrent loads
+      if (isLoading) {
+        console.log('Already loading a scene, ignoring request');
+        return;
+      }
+
+      isLoading = true;
+      console.log('Loading scene:', sceneName, 'Multi-load:', multiLoad);
+
+      // Show loading indicator
+      const loadingIndicator = document.getElementById('loading-indicator');
+      const loadingText = document.getElementById('loading-text');
+      const progressContainer = document.getElementById('loading-progress-container');
+      const progressBar = document.getElementById('loading-progress-bar');
+      const progressText = document.getElementById('loading-progress-text');
+
+      loadingText.textContent = `Loading ${sceneName.replace('.ply', '').replace(/-/g, ' ')}...`;
+      loadingIndicator.classList.add('visible');
+      progressContainer.classList.remove('visible');
+      progressText.classList.remove('visible');
+      progressBar.style.width = '0%';
+
       // Use direct endpoint instead of CDN to bypass cache issues
       // CDN: https://radiance-pipeline.nyc3.cdn.digitaloceanspaces.com/
       // Direct: https://radiance-pipeline.nyc3.digitaloceanspaces.com/
       const path = 'https://radiance-pipeline.nyc3.digitaloceanspaces.com/' + sceneName;
 
       try {
-        // If a scene is already loaded, remove it first
-        if (currentSplatMesh) {
-          console.log('Removing current scene before loading new one...');
-          scene.remove(currentSplatMesh);
-          currentSplatMesh.dispose();
-          currentSplatMesh = null;
+        // If NOT multi-load (Ctrl+Click), remove all existing splats
+        if (!multiLoad) {
+          // Remove all loaded splats from multi-load sessions
+          for (const mesh of loadedSplatMeshes) {
+            console.log('Removing multi-loaded scene...');
+            scene.remove(mesh);
+            mesh.dispose();
+          }
+          loadedSplatMeshes = [];
+
+          // Remove current single splat if it exists
+          if (currentSplatMesh) {
+            console.log('Removing current scene before loading new one...');
+            scene.remove(currentSplatMesh);
+            currentSplatMesh.dispose();
+            currentSplatMesh = null;
+          }
         }
 
-        // Load the new scene with Spark's SplatMesh
-        console.log('Creating new SplatMesh for:', path);
-        const splatMesh = new SplatMesh({ url: path });
+        // Fetch the file with progress tracking
+        console.log('Fetching file:', path);
+        const response = await fetch(path);
 
-        // Add to scene
-        scene.add(splatMesh);
-        currentSplatMesh = splatMesh;
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
 
-        currentSceneIndex = sceneIndex;
-        updateActiveScene(sceneIndex);
+        const contentLength = response.headers.get('content-length');
 
-        console.log('Scene loaded successfully');
+        if (contentLength) {
+          // Show progress bar if we know the file size
+          progressContainer.classList.add('visible');
+          progressText.classList.add('visible');
+
+          const total = parseInt(contentLength, 10);
+          let loaded = 0;
+
+          const reader = response.body.getReader();
+          const chunks = [];
+
+          while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) break;
+
+            chunks.push(value);
+            loaded += value.length;
+
+            const progress = Math.min(Math.round((loaded / total) * 100), 100);
+            progressBar.style.width = `${progress}%`;
+            progressText.textContent = `${progress}%`;
+
+            // Force browser to repaint
+            void progressBar.offsetWidth;
+          }
+
+          // Combine chunks into single Uint8Array
+          const fileBytes = new Uint8Array(loaded);
+          let position = 0;
+          for (const chunk of chunks) {
+            fileBytes.set(chunk, position);
+            position += chunk.length;
+          }
+
+          // Update loading text for processing phase
+          loadingText.textContent = 'Processing splats...';
+          progressContainer.classList.remove('visible');
+          progressText.classList.remove('visible');
+
+          // Load the scene with Spark's SplatMesh using the downloaded bytes
+          console.log('Creating new SplatMesh from bytes');
+          const splatMesh = new SplatMesh({
+            fileBytes: fileBytes,
+            onLoad: () => {
+              console.log('Scene loaded successfully');
+              // Hide loading indicator when splats are actually loaded and ready
+              loadingIndicator.classList.remove('visible');
+              isLoading = false; // Allow new loads
+            }
+          });
+
+          // Add to scene immediately (it will show once loaded)
+          scene.add(splatMesh);
+
+          // Track the loaded mesh - always add to loadedSplatMeshes
+          loadedSplatMeshes.push(splatMesh);
+
+          // In single-load mode, also track as current mesh for compatibility
+          if (!multiLoad) {
+            currentSplatMesh = splatMesh;
+          } else {
+            currentSplatMesh = null; // No single "current" mesh in multi-load mode
+          }
+
+          currentSceneIndex = sceneIndex;
+          updateActiveScene(sceneIndex);
+
+          // Wait for initialization to complete
+          await splatMesh.initialized;
+
+        } else {
+          // No content-length header, fall back to URL loading without progress
+          const splatMesh = new SplatMesh({
+            url: path,
+            onLoad: () => {
+              console.log('Scene loaded successfully');
+              loadingIndicator.classList.remove('visible');
+              isLoading = false; // Allow new loads
+            }
+          });
+
+          scene.add(splatMesh);
+
+          // Track the loaded mesh - always add to loadedSplatMeshes
+          loadedSplatMeshes.push(splatMesh);
+
+          // In single-load mode, also track as current mesh for compatibility
+          if (!multiLoad) {
+            currentSplatMesh = splatMesh;
+          } else {
+            currentSplatMesh = null; // No single "current" mesh in multi-load mode
+          }
+
+          currentSceneIndex = sceneIndex;
+          updateActiveScene(sceneIndex);
+          await splatMesh.initialized;
+        }
+
       } catch (error) {
         console.error('Error loading scene:', error);
+        loadingText.textContent = 'Error loading scene';
+        progressContainer.classList.remove('visible');
+        progressText.classList.remove('visible');
+
+        // Hide loading indicator after a delay on error
+        setTimeout(() => {
+          loadingIndicator.classList.remove('visible');
+          isLoading = false; // Allow new loads after error
+        }, 2000);
       }
     }
 
@@ -572,8 +805,10 @@
           <div class="scene-info">${sceneName}</div>
         `;
 
-        sceneItem.addEventListener('click', () => {
-          loadScene(sceneName, index);
+        sceneItem.addEventListener('click', (event) => {
+          // Check if Ctrl (or Cmd on Mac) is pressed for multi-load
+          const multiLoad = event.ctrlKey || event.metaKey;
+          loadScene(sceneName, index, multiLoad);
         });
 
         sceneList.appendChild(sceneItem);
