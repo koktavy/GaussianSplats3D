@@ -11,15 +11,15 @@
   <link rel="icon" type="image/png" sizes="16x16" href="./assets/favicon/favicon-16x16.png">
   <link rel="manifest" href="./assets/favicon/site.webmanifest">
   <title>lights, lol</title>
-  <meta name="description" content="The automated Radiance Portfolio">
+  <meta name="description" content="The automated radiance showcase">
   <meta name="author" content="Tavius Koktavy">
   <script type="text/javascript" src="js/util.js"></script>
   <script type="importmap">
     {
         "imports": {
-            "three": "https://cdn.jsdelivr.net/npm/three@0.178.0/build/three.module.js",
-            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.178.0/examples/jsm/",
-            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/0.1.10/spark.module.js"
+            "three": "https://cdn.jsdelivr.net/npm/three@0.183.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.183.0/examples/jsm/",
+            "@sparkjsdev/spark": "https://sparkjs.dev/releases/spark/preview/2.0.0/spark.module.js"
         }
     }
   </script>
@@ -273,7 +273,7 @@
     <!-- Sidebar Navigation -->
     <div id="sidebar">
       <div id="sidebar-header">
-        <h1>Radiance Portfolio</h1>
+        <h1>lights, lol</h1>
         <p id="scene-count">Loading scenes...</p>
       </div>
       <div id="scene-list">
@@ -298,7 +298,7 @@
   </div>
   <script type="module">
     import * as THREE from 'three';
-    import { SplatMesh } from '@sparkjsdev/spark';
+    import { SplatMesh, SparkRenderer } from '@sparkjsdev/spark';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
     let lights = new Set();
@@ -313,14 +313,15 @@
     const camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 0.1, 1000);
 
     // Standardized camera setup
-    camera.position.set(0, 1.6, 3);  // Standard position: eye level, 3 units back
-    camera.up.set(0, 1, 0);           // Standard up vector (Y-axis)
-    camera.lookAt(0, 1, 0);           // Look at eye level center
+    camera.position.set(0, 0, 15);
 
     const renderer = new THREE.WebGLRenderer({ antialias: false });
     renderer.setSize(window.innerWidth, window.innerHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     document.body.appendChild(renderer.domElement);
+
+    const sparkRenderer = new SparkRenderer({ renderer: renderer });
+    scene.add(sparkRenderer);
 
     // Setup controls with damping
     const controls = new OrbitControls(camera, renderer.domElement);
@@ -631,6 +632,21 @@
       // Direct: https://radiance-pipeline.nyc3.digitaloceanspaces.com/
       const path = 'https://radiance-pipeline.nyc3.digitaloceanspaces.com/' + sceneName;
 
+      // Detect file type from extension for formats that need explicit specification
+      const getFileType = (filename) => {
+        const lower = filename.toLowerCase();
+        // Spark 2.0 supports SOG v1 and v2 with auto-detection
+        // Let Spark auto-detect .sog, .zip, .ply, and .spz files
+        if (lower.endsWith('meta.json') || lower.endsWith('manifest.json')) {
+          return 'pcsogs'; // PC-SOGS JSON format (loose files)
+        }
+        if (lower.endsWith('.splat')) return 'splat';
+        if (lower.endsWith('.ksplat')) return 'ksplat';
+        // .sog, .zip, .ply, and .spz are auto-detected by Spark
+        return undefined;
+      };
+      const fileType = getFileType(sceneName);
+
       try {
         // If NOT multi-load (Ctrl+Click), remove all existing splats
         if (!multiLoad) {
@@ -702,16 +718,27 @@
           progressText.classList.remove('visible');
 
           // Load the scene with Spark's SplatMesh using the downloaded bytes
-          console.log('Creating new SplatMesh from bytes');
-          const splatMesh = new SplatMesh({
+          console.log('Creating new SplatMesh from bytes', fileType ? `(type: ${fileType})` : '(auto-detect from fileName)');
+          const splatMeshOptions = {
             fileBytes: fileBytes,
+            fileName: sceneName, // Add fileName for auto-detection from extension
             onLoad: () => {
               console.log('Scene loaded successfully');
               // Hide loading indicator when splats are actually loaded and ready
               loadingIndicator.classList.remove('visible');
               isLoading = false; // Allow new loads
             }
-          });
+          };
+
+          // Add fileType if we detected one (overrides fileName detection)
+          if (fileType) {
+            splatMeshOptions.fileType = fileType;
+          }
+
+          const splatMesh = new SplatMesh(splatMeshOptions);
+
+          // Apply 180-degree Z-axis rotation to correct 3DGS coordinate system
+          splatMesh.rotation.z = Math.PI;
 
           // Add to scene immediately (it will show once loaded)
           scene.add(splatMesh);
@@ -734,14 +761,25 @@
 
         } else {
           // No content-length header, fall back to URL loading without progress
-          const splatMesh = new SplatMesh({
+          const splatMeshOptions = {
             url: path,
+            fileName: sceneName, // Add fileName for auto-detection from extension
             onLoad: () => {
               console.log('Scene loaded successfully');
               loadingIndicator.classList.remove('visible');
               isLoading = false; // Allow new loads
             }
-          });
+          };
+
+          // Add fileType if we detected one (overrides fileName detection)
+          if (fileType) {
+            splatMeshOptions.fileType = fileType;
+          }
+
+          const splatMesh = new SplatMesh(splatMeshOptions);
+
+          // Apply 180-degree Z-axis rotation to correct 3DGS coordinate system
+          splatMesh.rotation.z = Math.PI;
 
           scene.add(splatMesh);
 
@@ -762,7 +800,9 @@
 
       } catch (error) {
         console.error('Error loading scene:', error);
-        loadingText.textContent = 'Error loading scene';
+        let errorMsg = 'Error loading scene: ' + (error.message || error);
+
+        loadingText.textContent = errorMsg;
         progressContainer.classList.remove('visible');
         progressText.classList.remove('visible');
 
@@ -851,13 +891,14 @@
         const xmlDoc = parser.parseFromString(data, "application/xml");
         const contents = xmlDoc.getElementsByTagName("Contents");
 
-        // Extract all .ply files
+        // Extract all supported splat files (.ply, .sog, .spz, .splat, .ksplat, .rad)
         const scenes = [];
+        const supportedExtensions = ['.ply', '.sog', '.spz', '.splat', '.ksplat', '.rad'];
         for (let i = 0; i < contents.length; i++) {
           const content = contents[i];
           const key = content.getElementsByTagName("Key")[0].textContent;
 
-          if (key.endsWith('.ply')) {
+          if (supportedExtensions.some(ext => key.toLowerCase().endsWith(ext))) {
             lights.add(key);
             scenes.push(key);
           }

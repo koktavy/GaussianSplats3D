@@ -1,4 +1,4 @@
-# Radiance Portfolio
+# lights.lol
 
 A 3D Gaussian Splatting portfolio powered by [Spark](https://sparkjs.dev) and Three.js. View photogrammetry captures as interactive 3D scenes directly in your browser.
 
