@@ -83,6 +83,57 @@ http
       return;
     }
 
+    // Handle .well-known paths (Chrome DevTools auto-discovery)
+    if (request.url.includes('/.well-known/')) {
+      response.writeHead(204, { 'Content-Type': 'application/json' });
+      response.end();
+      return;
+    }
+
+    // Handle source map requests by proxying to Spark CDN or GitHub raw
+    if (filePath.endsWith('.js.map')) {
+      const mapFileName = path.basename(filePath);
+
+      // Try Spark CDN first, then fall back to GitHub raw for development builds
+      const cdnUrls = [
+        `https://sparkjs.dev/releases/spark/preview/2.0.0/${mapFileName}`,
+        `https://raw.githubusercontent.com/sparkjsdev/spark/main/dist/${mapFileName}`
+      ];
+
+      console.log(`Proxying source map request for: ${mapFileName}`);
+
+      const https = await import('https');
+
+      const tryUrl = async (urlIndex) => {
+        if (urlIndex >= cdnUrls.length) {
+          // All URLs failed, return 204
+          console.log(`All source map URLs failed, returning 204`);
+          response.writeHead(204);
+          response.end();
+          return;
+        }
+
+        const cdnUrl = cdnUrls[urlIndex];
+        console.log(`  Trying: ${cdnUrl}`);
+
+        https.get(cdnUrl, (cdnResponse) => {
+          if (cdnResponse.statusCode === 200) {
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            cdnResponse.pipe(response);
+          } else {
+            console.log(`  Failed (${cdnResponse.statusCode}), trying next URL...`);
+            tryUrl(urlIndex + 1);
+          }
+        }).on('error', (err) => {
+          console.log(`  Error: ${err.message}, trying next URL...`);
+          tryUrl(urlIndex + 1);
+        });
+      };
+
+      await tryUrl(0);
+      return;
+    }
+
     let testDirectory = filePath;
     if (testDirectory.endsWith('/')) {
       testDirectory = testDirectory.substring(0, testDirectory.length - 1);
